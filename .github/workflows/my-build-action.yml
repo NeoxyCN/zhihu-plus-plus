@@ -124,6 +124,7 @@ jobs:
             else
               echo "::warning::ANDROID_SIGNING_KEY secret is invalid; generating a temporary CI signing key"
             fi
+            rm -f /tmp/check-keystore.jks
           fi
           if [ "$KEY_VALID" = "false" ]; then
             keytool -genkeypair -v -storetype PKCS12 \
