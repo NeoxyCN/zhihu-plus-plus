@@ -53,6 +53,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           override: true
+          cache: false
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk || true
@@ -102,16 +103,49 @@ jobs:
         run: ./gradlew ktlintCheck
       #- name: Run gradle tests
       #  run: ./gradlew test
+      - name: Prepare signing key
+        env:
+          ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          KEY_VALID=false
+          if [ -n "$ANDROID_SIGNING_KEY" ]; then
+            echo "$ANDROID_SIGNING_KEY" | base64 -d > /tmp/check-keystore.jks
+            if keytool -list -keystore /tmp/check-keystore.jks \
+                -storepass "$ANDROID_KEYSTORE_PASSWORD" > /dev/null 2>&1; then
+              KEY_VALID=true
+              echo "Using signing key from repository secret"
+              echo "signingKey=$ANDROID_SIGNING_KEY" >> $GITHUB_ENV
+              echo "keyAlias=$ANDROID_KEY_ALIAS" >> $GITHUB_ENV
+              echo "keyStorePassword=$ANDROID_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+              echo "keyPassword=$ANDROID_KEY_PASSWORD" >> $GITHUB_ENV
+            else
+              echo "::warning::ANDROID_SIGNING_KEY secret is invalid; generating a temporary CI signing key"
+            fi
+            rm -f /tmp/check-keystore.jks
+          fi
+          if [ "$KEY_VALID" = "false" ]; then
+            keytool -genkeypair -v -storetype PKCS12 \
+              -keystore app/zhihu.jks \
+              -alias zhihu \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "ci_signing_password" \
+              -keypass "ci_signing_password" \
+              -dname "CN=CI Build, OU=CI, O=ZhihuPlusPlus, L=Unknown, ST=Unknown, C=CN"
+            echo "signingKey=$(base64 -w 0 app/zhihu.jks)" >> $GITHUB_ENV
+            echo "keyAlias=zhihu" >> $GITHUB_ENV
+            echo "keyStorePassword=ci_signing_password" >> $GITHUB_ENV
+            echo "keyPassword=ci_signing_password" >> $GITHUB_ENV
+          fi
+
       - name: Build App
         # Build .apk
         run: |
           bash ./gradlew ${{inputs.args}} assembleFullRelease
           bash ./gradlew ${{inputs.args}} assembleLiteRelease
         env:
-          signingKey: ${{ secrets.ANDROID_SIGNING_KEY }}
-          keyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
           CI_BUILD_MINIFY: ${{ inputs.minify }}
       - name: Move files
         run: |
@@ -122,9 +156,9 @@ jobs:
         if: ${{ inputs.minify }}
         env:
           KEYSTORE_PATH: ../app/zhihu.jks
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ env.keyAlias }}
+          KEYSTORE_PASSWORD: ${{ env.keyStorePassword }}
+          KEY_PASSWORD: ${{ env.keyPassword }}
           APKSIGNER_PATH: /usr/local/lib/android/sdk/build-tools/35.0.0/apksigner
         run: |
           cd apk-recompress
